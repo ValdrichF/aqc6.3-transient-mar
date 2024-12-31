@@ -1,0 +1,12 @@
+[workspace]
+restore_data_on_startup = True
+save_data_on_exit = True
+save_history = True
+save_non_project_files = False
+project_type = 'empty-project-type'
+recent_files = ['Create_rch_files.py', 'idf_to_timeseries.py', 'nearest_sites.py', 'max_response.py', 'ts_key_characteristics.py', 'Extract_AMIGO_to_CSV.py', 'TMP_calc_response.py', 'baseline_depth.py', 'Create_ts_to_maps.py', 'ts_response.py', '..\\Plot_ip_op.py', 'Extract_AMIGO_to_CSV_cell.py', '..\\png_to_gif.py', 'decay_per_cell.py', 'inputs_plot.py', '..\\paper_save_preds.py', '..\\paper_Create_CNN_input2.py', 'RCH_for_CNN.py', 'save_CNN_preds.py', '..\\functions.py', 'response_vs_stationary.py', 'bodem_to_csv.py', 'Sy_from_MetaSWAP_scenario.py', 'Sy_from_MetaSWAP_scenario_mean.py']
+
+[main]
+version = 0.2.0
+recent_files = []
+
