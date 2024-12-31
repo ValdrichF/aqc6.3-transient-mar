@@ -1,0 +1,1276 @@
+---
+title: "Predicting Groundwater Storage from Seasonal Managed Aquifer Recharge: Insights from Machine Learning and Interpretable AI Techniques"
+author: 
+  - name: Valdrich Fernandes
+    email: valdrich.fernandes@wur.nl
+    affiliations: 
+      - ref: wur
+    attributes:
+      corresponding: true
+  - name: Perry de Louw
+    affiliations: 
+      - ref: wur
+      - ref: deltares
+  - name: Coen Ritsema
+    affiliations: 
+      - ref: wur
+  - name: Ruud Bartholomeus
+    affiliations: 
+      - ref: wur
+      - ref: kwr
+affiliations:
+  - id: wur
+    name: Wageningen University & Research
+    department: Soil Physics and Land Management group
+    city: Wageningen
+    country: the Netherlands
+  - id: deltares
+    name: Deltares
+    department: Department of Soil and Groundwater
+    city: Utrecht
+    country: the Netherlands
+  - id: kwr
+    name: KWR Water Research Institute
+    city: Nieuwegein
+    country: the Netherlands
+abstract: |
+    Managed Aquifer Recharge (MAR) is widely applied to enhance groundwater storage and promote the sustainable use of this essential resource. Techniques such as Machine Learning (ML) as surrogate for computationally intensive numerical models, are increasingly considered for identifying suitable locations for MAR. While ML has been demonstrated to be suitable for steady-state simulations, its application for transient modelling is much more challenging. However, understanding how water recharged during wet periods is retained and remains available during dry periods is critical, highlighting the importance of transient responses. In this study, we therefore employed ML to mimic the transient effect of MAR by decomposing the time series of groundwater storage when MAR stopped into two components—the MAR-response and the decay coefficient—based on the observation that the storage decays following an exponential curve. This decomposition provides a simplified yet effective representation of groundwater storage changes over time. Using U-Net and XGBoost, we demonstrated that ML can accurately capture these dynamics for the Baakse Beek catchment, located in the drought sensitive sandy soils of the Netherlands. The ML models achieved an R^2^ of more than 0.85 in predicting the two components of the long-term dynamics of the stored water. Additionally, using explainable AI techniques, specifically SHapley Aditive exPlanation values, we identified the site management decisions and the properties of the surface water network near the recharge site most significantly impact the effectiveness of the MAR in the region. This focus on model interpretability ensures transparency in the predictions, improving on the models’ generalizability and fosters trust among hydrologists and stakeholders. 
+
+format: 
+  docx:
+    fig-dpi: 300
+    fig-width: 6
+  html: 
+    toc: true
+  agu-pdf:
+    keep-tex: true
+number-sections: true
+citation:
+  container-title: Water Resource Research
+editor: visual
+execute:
+  echo: false
+  message: false
+  warning: false
+  cache: true
+bibliography: D:/Dropbox/WUR/Rscripts/P2_initial_response/AqC_paper2.bib
+csl: american-geophysical-union.csl
+---
+
+# Introduction
+
+Seasonal water availability has increasingly become a concern worldwide. Even countries with typically robust water systems have recently faced periods of water stress during extended periods of droughts. The 2018-2020 drought, for instance, affected most of continental Europe, limiting surface water availability in major international rivers [@rakovec2022]. Similar extended periods of droughts are expected to become more frequent in future climatic conditions [@gu2023; @aalbers2023; @hari2020; @vanderwiel2021]. The 2018 drought saw a general deterioration of surface water quality, further exacerbating the stress on water users dependent on these sources [@wolff2021]. This combination of poor water quality and scarcity is expected to worsen in Western Europe, particularly between June and October [@jones2024]. Capturing excess water during the seasonal surplus could help mitigate some of the demand during the dry season.
+
+Addressing this vulnerability requires prioritizing water management solutions that increase summer water availability [@bartholomeus2023], while still accounting for risks of floods and waterlogging. Efficient groundwater management could address some of the vulnerability by serving as a buffer, capturing water during surplus that supports demands during dryer periods. While much of this recharge occurs naturally, it can be further enhanced by recharging surplus water into the groundwater aquifers using Managed Aquifer Recharge (MAR) techniques [@dillon2020; @dillon2019; @hartog2017].
+
+In a previous study, we demonstrated U-Net's potential to estimate the steady-state groundwater response to MAR [@fernandes2024] through a technique called surrogate modelling. The surrogate model is a computationally simplified model trained on data generated using the computationally expensive model. However, the steady-state MAR response typically does not describe the transient behaviour of MAR, as water is recharged during periods with a water surplus, to buffer the water availability using the subsurface. The first goal of this paper therefore is to investigate a potential technique for ML to capture the transient dynamics of groundwater response to MAR capturing both immediate effects and longer-term dynamics during periods without recharge.
+
+In addition to capturing the transient behaviour of MAR systems in ML, we focus on model interpretability. @dai identified interpreting the ML models to be complex and cumbersome. However, we hypothesize that by using explainable AI techniques such as SHapley Aditive exPlanation (SHAP) on ML models, the relations identified by the ML model can be explained, further building trust in the ML model.
+
+SHAP is a powerful model interpretation technique that quantifies the contribution of each input feature to a model's predictions, offering detailed insights into the relations identified by the model. By quantifying the contribution of each feature, SHAP not only indicates the importance but also the direction of the effect of that feature on the model's prediction. Furthermore, by evaluating feature contributions across an entire dataset, SHAP uncovers the generalized relations that underpin the model's predictions, unlike traditional local sensitivity analysis that focuses on features at an individual observation. This dataset-wide perspective allows for identifying consistent, generalized effects of the inputs on the outputs, which could serve as a foundation for other Multi-Critera Decision Analysis (MCDA).
+
+In this study, we thus present ML surrogate models to efficiently and accurately predict the transient dynamics of groundwater response to MAR, capturing the recharging process of MAR during periods of water surplus and the decay or discharge of the stored water volume during periods without recharge. By calculating the SHAP values of the surrogate model, we identify and quantify the influence of each geo-hydrological input on the groundwater response, providing explainable insights into the model's prediction. These insights not only enhance our understanding of the system but also lay the groundwork for integrating MCDA to identify potential locations for MAR. Through this approach, we aim to develop a comprehensive understanding of the key criteria influencing water storage due to MAR in the short to medium-term period.
+
+# Methodology
+
+```{r}
+library(stringr)
+library(lubridate)
+library(tidyverse)
+library(ggplot2)
+library(tagger)
+library(data.table)
+library(ggplot2)
+library(DALEX)
+library(stringr)
+library(tagger)
+library(shapviz)
+library(readr)
+library(patchwork)
+source("../paper_2/functions.R")
+common_theme = list(
+  theme_light(),
+  theme(text=element_text(size=12), 
+        axis.text=element_text(size=8, color = 'black'),
+        axis.title=element_text(size=12),
+        plot.title=element_text(size=12),
+        legend.text=element_text(size=12),
+        legend.title=element_text(size=12), 
+        legend.position = 'bottom',
+        strip.background = element_blank(),
+        strip.text = element_blank(),
+        tagger.panel.tag.text = element_text(size = 8, color = 'black', face = 'bold'),
+        tagger.panel.tag.background = element_rect(fill = "white", color = 'grey')
+        )
+)
+```
+
+## General overview
+
+The methodology employed in this study borrows from @fernandes2024, where the groundwater response to hypothetical MAR sites are simulated with a numerical groundwater model, which makes up the training and testing data for the ML surrogate models. The groundwater response is calculated as the difference in the groundwater heads between scenarios with MAR and a scenario with only natural recharge. The location, size, and recharge rate are selected randomly to represent the entire range of possibilities within the demonstration region. As a continuation from @fernandes2024, we demonstrate the applicability of the surrogate modelling technique for the Baakse Beek catchment, which is located in the eastern sandy soils of the Netherlands. This region is characterised by highly transmissive and freely draining soils with a dense surface water network of ditches and streams that drain the groundwater reservoir. This network has been significantly intensified over time, increasing the region's vulnerability to water shortages during extended dry periods. In this study, we study how the water recharged by MAR decays to the natural groundwater levels during dry periods, periods without MAR.
+
+## Groundwater models
+
+The artificial recharge is simulated using a groundwater model, AMIGO [@vreugdenhil_modelverbetering_2021], which represents the subsurface in the part of Gelderland province that is under the jurisdiction of the water board Rijn en IJssel in the Netherlands. AMIGO is a coupled unsaturated-saturated zone model similar to those used in @querner2016, and @vanwalsum2011 where the saturated zone is represented using MODFLOW-2005 [@harbaugh_modflow-2005_2005] while the unsaturated zone is represented using MetaSWAP. Gridded meteorological data from the AMIGO dataset, including precipitation and Makkink reference crop evaporation, is applied with the MetaSWAP that calculates the effective groundwater recharge, which is then applied to the saturated zone model. The saturated zone represents a 200 m thick sequence of Pleistocene sands, which is underlain by the clayey Breda formation. This formation represents the model basement, represented in the model by a no-flow boundary condition. Further details of the meteorological conditions and the model are available in @vreugdenhil_modelverbetering_2021 and @fernandes2024. The model extent and the boundary conditions used to represent the Baakse Beek catchment were the same as in @fernandes2024, except for the outer boundary conditions and the river levels for the IJssel River to the west, where temporal data was available. The time-varying groundwater heads at the outer boundary were derived from a long-term simulation that is detailed in @vreugdenhil_modelverbetering_2021. The initial groundwater head is also derived from this long-term simulation and is detailed in @sec-scenarios-considered. Furthermore, monthly river stage data is used for the IJssel River to the east.
+
+In the simulated scenarios, the artificial recharge is simulated using the Recharge (RCH) package in MODFLOW as in @fernandes2024. This recharge is applied directly to the saturated zone, bypassing the unsaturated zone. It represents the effective recharge rate that reaches the saturated zone and is analogous to aquifer recharge applied below the surface, such as through sub-surface irrigation. As a result, the recharged water does not influence the evapotranspiration, except due to the increase in the groundwater level. While this is a simplification of reality, this assumption has minimum impact on the system, especially away from the recharge site. At the recharge site, we underestimate the evaporation and consequently overestimate the effective recharge site.
+
+## MAR Scenarios {#sec-scenarios-considered}
+
+In the scenarios considered, MAR is only applied in months when precipitation exceeds the evaporation demand for a year with average meteorological conditions. For this analysis, the meteorological data from the Hupsel station, data made available by the Royal Netherlands Meteorological Institute (KNMI), is analyzed as it is located within the study area. Complete data is available from October 1993 onwards based on which the annual cumulative evaporation excess precipitation is calculated. Based on the 31 years of available data, 2012 was selected as a representative year for average meteorological conditions, thas the precipitation excess fell within the 25th to 75th percentile for most of the year (see @fig-precip). The cumulative precipitation surplus at Hupsel increased between October 1, 2011, and March 1, 2012 (blue shaded region in @fig-precip), indicating higher water availability for artificial recharge. In the scenarios considered, artificial recharge was simulated during this period of water surplus and the progression of the groundwater response during the period without artificial recharge was analyzed until October 1, 2012.
+
+To ensure representative antecedent conditions for all scenarios, a two-year start-up run was simulated from 1st October 2009 to 30th September 2011. The initial groundwater levels for this start-up run were derived from a simulation starting in April 2004, which was conducted outside the scope of this study. Since initial soil moisture conditions for MetaSWAP were unavailable for this earlier run, conditions that would ensure an average recharge flux were used as the starting conditions for the start-up run.
+
+We simulated a total of 720 artificial recharge sites, evenly spaced across the model domain. The recharge rate at these sites ranged from 5 to 25 mm/day, and the site sizes varied between 0.1 and 1 km². The recharge rate and the size of each site were selected randomly using a Latin hypercube sampling technique, similar to the methodology employed by @fernandes2024. Six recharge sites were simulated simultaneously in each scenario to reduce the number of groundwater model simulations needed. The interaction between the recharge sites was minimized by maintaining a separation distance of six times the leakage factor between the sites. This distance ensures that groundwater levels return to their natural state between adjacent recharge sites, hence minimizing the interaction between the sites.
+
+```{r}
+#| label: fig-precip
+#| fig-cap: Cumulative potential precipitation surplus (i.e. precipitation minus reference evaporation according to @makkink1957) in the simulated years, 2011 and 2012 as compared to the average surplus between 1993 and 2024. Artificial recharge is applied between 1^st^ October 2011 till 1^st^ March 2012, when precipitation exceeds the reference evaporation.
+# https://www.daggegevens.knmi.nl/
+# https://dataplatform.knmi.nl/dataset/preview/etmaalgegevensknmistations-1
+dat_path = "Hupsel.csv"
+
+data = read.csv(dat_path)
+
+data = data%>%
+  select(time, station, lat, lon, RH, EV24)%>%
+  filter(complete.cases(.))%>%
+  mutate(time = ymd(time))
+
+# check if all days are present
+data = data%>%
+  mutate(diff_days = c(1, diff(time)))
+# 5 gaps exist of more than 1 day
+# find the last complete sequence
+data = data%>%
+  mutate(in_interval = cumsum(diff_days>1))%>%
+  filter(in_interval==max(in_interval))%>%
+  select(-in_interval, -diff_days)
+# Cummulative plot of precipitation - evaporation
+data_excess = data%>%
+  mutate(precip_excess = RH-EV24,
+         month = month(time),
+         year = year(time))%>%
+  # Format the day of year to begin from 1st March
+  group_by(year)%>%
+  reframe(time = time,
+          cummulative_excess = cumsum(precip_excess),
+          day_of_year = yday(time))%>%
+  mutate(day_of_year = as.Date("2010-12-31") + day_of_year)
+
+mean_data_excess = data_excess%>%
+  # filter(day_of_year<366)%>%
+#  filter(year>=2004)%>%
+  group_by(day_of_year)%>%
+  summarise(mean = mean(cummulative_excess),
+            lower_quantile = quantile(cummulative_excess, 0.25),
+            upper_quantile = quantile(cummulative_excess, 0.75))
+
+recharge_time = data.frame(
+  xmin = dmy(c("01-10-2011", "01-01-2011")),
+  xmax = dmy(c("31-12-2011", "01-03-2011")),
+  ymin = -Inf,
+  ymax = Inf
+)
+data_plot = data_excess%>%
+  # filter(year%in%c(2006, 2008, 2010, 2012, 2019, 2018))%>%
+  filter(year%in%2011:2012)%>%
+  mutate(year = as.factor(year))
+data_plot%>%
+  ggplot()+
+  geom_line(aes(day_of_year, cummulative_excess, colour = year), linewidth = 1, alpha = 0.5)+
+  geom_line(aes(day_of_year, cummulative_excess, colour = year), linewidth = 1,
+            data = data_plot%>%
+              filter(between(time, ymd("20111001"), ymd("20121001"))))+
+  geom_ribbon(data = mean_data_excess, aes(day_of_year, ymin = lower_quantile, ymax = upper_quantile, fill = '50th quantile'), alpha = 0.2)+
+  geom_line(data = mean_data_excess, aes(day_of_year, mean, colour='Average'), linewidth = 0.7)+
+  geom_rect(data = recharge_time, aes(xmin = xmin, xmax = xmax, ymin = ymin, ymax = ymax, fill = "Recharge period"), alpha = 0.2)+
+  scale_color_manual(values = c('2011'='#5d3a9b', '2012'='#e66100', 'Average'='black'))+
+  scale_fill_manual(name = "", values = c('50th quantile'='black',
+                                          "Recharge period" ='steelblue'))+
+  scale_x_date(date_labels = "%B", breaks = '2 months')+
+  labs(x = "Month of the year", y = 'Precipitation surplus [mm]', color = "")+
+  common_theme+
+    guides(fill=guide_legend(nrow=2,byrow=TRUE),
+           color=guide_legend(nrow=2,byrow=TRUE))
+
+```
+
+## Progression of the storage during the summer season
+
+In this study, we aim to predict the progression of groundwater storage during periods without MAR. Groundwater storage is defined as the total increase in groundwater heads, analogous to the volume of the aquifer saturated due to MAR. Rather than predicting the complete time series of the groundwater storage in the period without MAR, we decompose it into two parameters of the exponential decay function. The response peaks during the recharge period and then gradually returns to natural groundwater levels once recharge stops. Simulation results (see @fig-response_ts) suggest that this decay follows an exponential curve, a pattern commonly observed in systems where the rate of change is proportional to the current quantity. This behaviour is also found in the discharge from a linear reservoir in hydrology, which decays exponentially after precipitation ends. In such reservoirs, the discharge $Q_t$ at time $t$ is directly proportional to the water storage $S_t$ within the catchment, governed by the reservoir constant $k$ [@wittenberg_nonlinear_1994; @pedersen_hydrographs_1980; @dingman_physical_2015]. This relationship is captured in @eq-linear-reservoir1, with the change in discharge over time described by @eq-linear-reservoir-dq. Assuming no external fluxes like recharge or extraction, the storage dynamics can be derived as shown in @eq-linear-reservoir-dqS.
+
+In this analogy, the groundwater response to artificial recharge can be compared to the storage $S$ in a linear reservoir. The initial storage $S_0$ represents the MAR-response, or the groundwater response at the end of the recharge period, while the reservoir constant $k$ serves as the decay coefficientwhich defines the rate at which the groundwater storage is drained to the surface water network. By estimating these two parameters, the progression of groundwater storage after the recharge period can be effectively described, providing a clear understanding of how the system returns to equilibrium. These two parameters, the MAR-response and the decay coefficient, are the target variables for the ML models. These terms are used throughout the paper to identify the two separate phases of MAR.
+
+$$
+Q_t = k \cdot S_t
+$$ {#eq-linear-reservoir1}
+
+$$
+Q_t = Q_0 \cdot e^{-k \times t}
+$$ {#eq-linear-reservoir-dq}
+
+$$
+S_t = S_0 \cdot e^{-k \times t}
+$$ {#eq-linear-reservoir-dqS}
+
+## ML procedure
+
+```{r}
+#| label: tbl-SHAP_implemented
+#| tbl-cap: Models used in this study and the purpose for which they are used. The effect of the inputs on the MAR-response and the decay coefficient are estimated based on the SHAP values of the trained XGBoost models
+# Create a data frame for the table content
+table_data <- data.frame(
+  Response_characteristic = c("MAR-response", "MAR-response", "MAR-response", "MAR-response", "Decay coefficient", "Decay coefficient"),
+  Model = c("Num. groundwater model - Training data", "Num. groundwater model", "U-Net", "XGBoost", "Num. groundwater model - Training data",  "XGBoost"),
+  Scenario_type = c("T", "S", "T", "T", "T", "T"),
+  SHAP_implemented = c("-", "No", "No", "Yes", "-", "Yes"),
+  stringsAsFactors = FALSE
+)
+
+library(flextable)
+# library(officer)
+table_data%>%
+  flextable()%>%
+  merge_v(j = ~Response_characteristic)%>%
+  set_header_labels(Response_characteristic = "Response characteristic",
+                    Model = "Model",
+                    SHAP_implemented = "SHAP implemented",
+                    Scenario_type = "Scenario type")%>%
+  align(j = c("Model", "SHAP_implemented"), align = "center")%>%
+  align(i = 1, j=NULL, align = "center", part = "header")%>%
+  footnote(
+      i = 1, j = 3,
+      value = as_paragraph("T - Transient scenarios; S -  Steady-state scenarios"),
+      ref_symbols = "a",
+      part = "header",
+      inline = F
+  )%>%
+  autofit()%>%
+  fix_border_issues(part = "all")%>%
+  theme_vanilla()
+
+```
+
+### ML models used
+
+Two ML models were used to analyze the response to artificial recharge, U-Net and XGBoost. U-Net has previously been shown to accurately reproduce the steady-state response to artificial recharge [@fernandes2024]. In this study, it is trained to estimate the spatial distribution of the MAR-response, at the end of the recharge period, see @tbl-SHAP_implemented. The response is a spatially distributed result of the simulations, calculated for each cell around a recharge site. In contrast, the decay coefficient characterizes the overall response, describing it with a single value for each recharge site, even when the site spans multiple cells. Similarly, the total MAR-response can be calculated for each recharge site based on the spatial distribution of the MAR response. XGBoost has been shown to accurately represent nonlinear relations [@chen_xgboost_2016], lending itself to estimate each recharge site's aggregated MAR-response and the decay coefficient, as shown in @tbl-SHAP_implemented.
+
+### Data preparation {#sec-data-preparation}
+
+U-Net is trained on two-dimensional representations of the geo-hydrological properties from the numerical groundwater model, AMIGO. Following @fernandes2024, six inputs were shortlisted to capture the interactions within the system, applied recharge rate, aquifer transmissivity, vertical resistance below the aquifer, steady state groundwater depth, drain and river conductance, and groundwater depth below the drain level and river stage. Among these inputs, the aquifer properties were further pre-processed as the 15 model layers were often discontinuous, represented by constant values [@vreugdenhil_modelverbetering_2021; @fernandes2024]. The model layers were combined to represent an aquifer if the vertical resistance between the layers was less than 200 days leaving us with seven aquifers. Of the seven aquifers, the properties of the first aquifer were fed as an input to the model as the artificial recharge was applied to the phreatic aquifer. Further details on the inputs to the U-Net model are described in @fernandes2024.
+
+XGBoost requires tabular inputs rather than the spatial distribution of the geo-hydrological properties used to train U-Net. However, the inputs need to represent the properties around the recharge site that could impact the groundwater response at the site. To satisfy this condition, the geo-hydrological properties around the site are summarized using a Gaussian filter. This method of feature extraction represents a distance-weighted average of the inputs. The weights are calculated based on the standard deviation of the Gaussian. After comparing multiple standard deviations from 250 m to 1500 m, a standard deviation of 500 m trained the model with the highest R^2^. Based on this, a filter with a standard deviation of 500 m is used for all the inputs. Some inputs are not defined everywhere, especially the surface water network. As an example, the river conductance is defined only at river streams, where the RIV package of MODFLOW is active. Locations where the RIV package is inactive, are represented by zero conductance before the Gaussian filter is applied.
+
+The Gaussian filter is applied to all inputs to the XGBoost model, which we categorized into three groups, site properties, aquifer properties, and surface network properties. The site properties are represented in U-Net by a map of the applied recharge, which represents both the recharge rate and the size of the recharge site. These two inputs are provided separately to the XGBoost. For aquifer properties, the inputs include transmissivity, vertical resistance, and groundwater depth for the situation without MAR (baseline scenario). The transmissivity and the vertical resistance undergo the same pre-processing as those used for the inputs to U-Net. While groundwater depth is not strictly an aquifer property, it results from the interaction of various location specific factors, such as transmissivity and seepage flux to the surface water network. Due to the localized nature of these influences, groundwater depth is included along with other aquifer properties. The groundwater depth calculated from the baseline scenarios, with only natural recharge, is divided into two periods: winter and summer. These periods were defined to coincide with the periods with and without recharge in @sec-scenarios-considered. As the artificial recharge is applied during the winter months, the MAR-response is more strongly influenced by the winter conditions. On the contrary, the decay coefficient depends on summer conditions and is therefore predicted using the average summer groundwater depth. Among the surface water network properties, the river and drain conductance are a common input between the two models, XGBoost and U-Net. Additionally, river density is included as an input to XGBoost to quantify drainage intensity and is calculated based on the cells where the RIV package in MODFLOW is active. Ditch distance is a common alternative for capturing similar information, which is calculated from river conductance. However, as river density is less dependent on the length of the river within the cell, it exhibits a weaker correlation with river conductance. This reduced correlation and the fact that river density is bounded between 0 and 1 result in more stable model training makes river density the more robust parameter for quantifying drainage intensity, especially for ditches and streams that are more than 25 m (numerical model resolution) away from each other. Finally, the groundwater depth relative to the drain level and river stage was excluded from the inputs to XGBoost as it was highly correlated with groundwater depth. Strong correlation complicates input attribution without significantly improving the model performance.
+
+While the MAR-response is the response at the end of the recharge period, the decay coefficient was calculated from exponential curves fitted to the time series of the numerical model simulation results. The curves were fitted using a robust linear regression using the 'rlm' function from the 'MASS' package in R. However, the distribution of the target variables presents a right-skewed distribution, see @fig-histogram. This skew would make the trained ML model biased to predict low values as these values are more common. To minimize the bias and make the target variables more normally distributed, the MAR-response and decay coefficient, are log-transformed. However, the target variables described in the figures and results of this study are back-transformed to the original scale.
+
+```{r}
+#| label: fig-histogram
+#| fig-cap: Distribution of the target variables, the MAR-response, A, and the decay coefficient, B, based on 720 hypothetical recharge sites.
+source("load_site_data.R")
+decay_total_sub%>%
+  select(x, y, slope_total, initial_total)%>%
+  mutate(initial_total = initial_total-6)%>%
+  pivot_longer(cols = ends_with("total"))%>%
+  mutate(value = 10^value)%>%
+  mutate(name = case_when(
+    name == "initial_total" ~ "MAR-response~(M~m^{3})",
+    name == "slope_total" ~ "Decay~Coefficient~(per~day)"
+  ))%>%
+    mutate(name = factor(name, levels = c("MAR-response~(M~m^{3})", "Decay~Coefficient~(per~day)")))%>%
+  ggplot(aes(value))+
+  geom_histogram()+
+  scale_x_log10()+
+  labs(x = "", y = "Count")+
+  facet_wrap(vars(name), scales = "free_x", labeller = label_parsed, strip.position = 'bottom')+
+  common_theme+
+  tag_facets(tag_pool = LETTERS)+
+  theme(strip.placement = "outside",
+        strip.background = element_blank(),
+        strip.text.x = element_text(size = 12, face = "bold"),
+        panel.spacing = unit(1, "lines"))
+
+```
+
+### Training process
+
+U-Net is trained using the ADAM optimizer with a reducing learning rate schedule with a relatively small batch size of 12. These settings have been shown to effectively train the model [@fernandes2024]. The model was trained on the results from 500 recharge sites and its performance was tracked during training using an unseen dataset, validation set, of 100 recharge sites. The training was concluded if the model performance didn't improve over ten epochs.
+
+The training process for XGBoost follows a comprehensive approach aimed at maximizing the performance and generalizability of the trained model. The results of all the scenarios are divided into training (N = 500) and testing sets (N = 220), which are used to train and assess the model's generalization respectively. Employing repeated 10-fold cross-validation with 5 repeats, the model hyperparameters are tuned systematically, exploring a range of parameters such as tree depth, minimum node size, and learning rate through a grid search methodology. Hyperparameters are predefined settings in a machine learning model that control the learning process, influencing how the model optimizes its predictions and generalizes to new data. 500 values of each hyperparameter are sampled with Latin Hypercube Sampling. This rigorous evaluation across multiple folds mitigates overfitting and enhances reliability [@soper2021]. The hyperparameters with the highest cross-validation R^2^ were used to train the final model on the entire training set resulting in a robust XGBoost regression model improving the model's generalizability to out-of-sample scenarios.
+
+### The effect of specific yield {#sec-methods-SY}
+
+In addition to the listed inputs, the transient phreatic groundwater heads are also dependent on the specific yield of the aquifer, unlike for steady-state groundwater heads. The specific yield ranges between 0 and 1, which is a ratio between the flux into or out of the model cell and the associated head change per unit area of the cell. It affects how quickly the groundwater heads react to fluxes in the groundwater. While the original inputs were selected based on @fernandes2024, which focused on the steady-state groundwater response, this analysis targets the transient response, where the specific yield plays a critical role. For this study, the specific yield from the baseline scenario with natural precipitation is used as an input, which was calculated for each time step using the unsaturated zone model MetaSWAP (part of the numerical model simulations). The time series of specific yield was divided into two periods: summer and winter, just like the groundwater depth data. The average winter specific yield is used to predict the MAR-response while the summer specific yield is used for the decay coefficient. The specific yield around the sites is represented using a Gaussian filter, just like the other inputs.
+
+### Interpreting the learnt relations
+
+SHAP (SHapley Additive exPlanations) values provide a comprehensive method for interpreting machine learning models by attributing importance values to each input feature [@lundberg_unified_2017; @young_monotonic_1985]. These values, derived from game theory principles, delineate the impact of individual features on model predictions. Here we use Tree SHAP [@lundberg_local_2020], which is optimized for tree-based machine learning models such as XGBoost. Positive SHAP values indicate that a feature increases the predicted target, while negative values indicate a decrease. Importantly, the sum of all SHAP values for each feature equals the predicted target variable, as expressed in @eq-SHAP_add:
+
+$$
+\hat{y} = \hat{y_0} + S_{x_1} + S_{x_2} + \dots + S_{x_n}
+$$ {#eq-SHAP_add}
+
+where $\hat{y}$ is the predicted target, $\hat{y_0}$ is the average target across the training dataset, and $S_{x_1}$, $S_{x_2}$, ... $S_{x_n}$ are the SHAP values of the input features.
+
+In this study, the target variables (MAR-response and decay coefficient) are log-transformed before training the model and the SHAP values explain the predictions on the log-transformed scale. To interpret the SHAP values in the original scale of the target variables, they are inverse-transformed by exponentiation. As per the product rule of exponents, this transformation converts the SHAP values from being additive to multiplicative, as shown in @eq-SHAP_prod. In this transformed context, $10^{\hat{y_0}}$ approximates the average target value in the original scale. Here, a SHAP value of 1.5 indicates that the feature increases the prediction by 1.5 times, or 50% higher than the average target value $10^{\hat{y_0}}$.
+
+$$
+10^\hat{y} = 10^\hat{y_0} \cdot 10^{S_{x_1}} \cdot 10^{S_{x_2}} \cdot \dots \cdot 10^{S_{x_n}}
+$$ {#eq-SHAP_prod}
+
+## Efficient locations for MAR
+
+The trained ML models were used to calculate many recharge sites across the entire model domain to identify efficient MAR-locations. To maintain comparability, the size and the recharge rate at the sites are maintained between them to be 10 ha and 15 mm/day respectively. In total, 1.6 million recharge sites were simulated with a space of 25 m between their centres, which corresponds to the resolution of the geo-hydrological data. The locations are compared based on three criteria, the steady-state MAR-response, the MAR-response after 5 months of artificial recharge and the fraction of the MAR-response left in the subsurface after 3 months of no recharge. The steady-state MAR-response is estimated using the U-Net from @fernandes2024, while the transient MAR-response, ie. after 5 months of recharge, is estimated using XGBoost for its faster estimates than U-Net. Similarly the fraction is calculated from the decay coefficient from XGBoost using @eq-linear-reservoir-dqS. We calculate the fraction to demonstrate the versatility of the decay coefficient. As it is independent of the duration it allows the user to define the duration of the dry period they are interested in.
+
+# Results
+
+## MAR-response estimates
+
+### Steady-state estimates
+
+```{r}
+stationary_response = fread("Steady_state_total_response.csv")
+avg_percent = stationary_response[,mean(Transient/Stationary)]
+quant_percent = stationary_response[, quantile(Transient/Stationary, c(0.05,0.95))%>%round(2)]*100
+
+performance_stat = stationary_response[,.(RMSE = rmse_vec(Transient, Stationary)%>%round(3),
+                                 Rsq = rsq_vec(Transient, Stationary)%>%round(2),
+                                 MAE = mae_vec(Transient, Stationary)%>%round(3),
+                                 MAPE = mape_vec(Transient, Stationary)%>%round(2),
+                                 avg_Percent = avg_percent%>%round(2)*100)]
+line_title = "dashed"
+names(line_title) = paste0(performance_stat$avg_Percent[1],
+         "% of steady-state response")
+
+```
+
+When estimating the MAR-response, the groundwater response at the end of the recharge period, the steady state response could be a rather quick estimate that is simulated using the numerical groundwater model. It represents the result of long-term artificial recharge. However, seasonal variations and the short recharge period make this estimate inaccurate. The steady-state response typically exceeds the transient MAR-response for the majority of recharge sites, as illustrated in @fig-response_ts A and @fig-y_yhat_steady. On average, the transient MAR-response was 56% of the steady-state response, between 37% and 79% for 90% of the sites. Additionally, 10 sites exhibited a higher MAR-response than the steady-state response, one of which is depicted in @fig-response_ts A. This can be attributed to lower groundwater heads in February, near these recharge sites, compared to steady-state conditions due to the high transmissivity and proximity to streams and rivers. However, the transient MAR-response shows a strong correlation with the steady-state response, with an R^2^ of `r performance_stat$Rsq`. This suggests that the steady-state response can serve as a good proxy to identify locations where MAR is likely to result in a high MAR-response. However, steady-state estimates do not provide precise quantification of the response, nor do they offer insights into the duration for which the stored water will remain in the subsurface. Addressing these questions requires simulating transient scenarios.
+
+```{r}
+#| label: fig-response_ts
+#| fig-cap: Groundwater response simulated at six hypothetical recharge sites. The steady state and the transient response are calculated from scenarios simulated with the numerical groundwater model AMIGO while the fitted decay is fit using a robust linear regression.
+source("load_site_data.R")
+decay_plot = decay_total%>%
+  # filter(scenario==77)%>% #23 is good
+  mutate(fitted_total = map2(data, slope_total, fitted_exp, scale_0 = 1, y_var = "total"))%>%
+  select(scenario, rch_site, data, fitted_total)%>%
+  unnest(c(data, fitted_total))%>%
+  as.data.table()
+
+stationary_response[, ":="(dx = NULL,
+                           dy = NULL,
+                           Transient = NULL)]
+setkey(stationary_response, scenario, rch_site)
+setkey(decay_plot, scenario, rch_site)
+
+decay_plot = stationary_response[decay_plot]
+decay_plot[time>lubridate::ymd("20120225"), Stationary:=NA]
+
+recharge_time = data.frame(
+  xmin = dmy("01-10-2011"),
+  xmax = dmy("01-03-2012"),
+  ymin = -Inf,
+  ymax = Inf
+)
+
+
+decay_plot%>%
+    filter(scenario==76)%>%
+  ggplot()+
+  geom_line(aes(time, fitted_total/1e6, linetype = "Fitted decay"))+
+  geom_line(aes(time, total/1e6, linetype = "Simulated", colour = "Transient"))+
+  geom_line(aes(time, Stationary/1e6, color = "Steady-state response", linetype = "Simulated"))+
+  geom_rect(aes(xmin = xmin,
+                xmax = xmax,
+                ymin = ymin,
+                ymax = ymax, 
+                fill = "Recharge period"),
+            data = recharge_time,
+            alpha = 0.2)+
+  facet_wrap(vars(rch_site))+
+  scale_linetype_manual(values = c("Simulated" = "solid", "Fitted decay" = "dashed"), breaks = c("Fitted decay"))+
+  scale_fill_manual(name = "", values = c("Recharge period" ='steelblue'))+
+  labs(x = NULL, y = bquote("Grwt. storage increase [M "*m^3*"]"), linetype = NULL, color=NULL)+
+  tag_facets(tag_pool = LETTERS)+
+  # scale_y_log10()+
+  coord_cartesian(ylim = c(1e-3,NA))+
+  theme_light()+
+    theme(legend.position = 'bottom',
+          text=element_text(size=12), 
+          axis.text.y=element_text(size=12, color = 'black'),
+          axis.text.x=element_text(size=12, angle = 45, hjust = 1, color = 'black'),
+          strip.text=element_blank(),
+          strip.background = element_blank(),
+          # legend.box = 'vertical',
+          tagger.panel.tag.text = element_text(size = 12, color = 'black', face = 'bold'),
+          tagger.panel.tag.background = element_rect(fill = "white", color = 'grey'))+
+    guides(fill=guide_legend(nrow=2,byrow=TRUE),
+           color=guide_legend(nrow=2,byrow=TRUE),
+           linetype=guide_legend(nrow=2,byrow=TRUE))
+
+```
+
+```{r}
+#| label: fig-y_yhat_steady
+#| fig-cap: The volume of Steady-state response as compared to the transient  MAR-response on 25th February, after five months of artificial recharge. Both responses are estimated using the numerical groundwater model. The dotted line represents the average ratio of the MAR-response to the steady-state response.
+
+ggplot(stationary_response, aes(Stationary/1e6, Transient/1e6))+
+    geom_point()+
+    geom_abline(aes(intercept = 0, slope = avg_percent,
+                    linetype = names(line_title)))+
+    scale_linetype_manual(values = line_title)+
+    coord_cartesian(xlim = c(1e-2, 3/avg_percent),
+                    ylim = c(1e-2, 3)
+                    )+
+    labs(linetype = "", 
+         color = "",
+         x = bquote("Steady-state MAR Response [M "*m^3*"]"),
+         y = bquote("Transient MAR Response [M "*m^3*"]"))+
+    common_theme+
+  NULL
+
+```
+
+```{r include=FALSE}
+model_decay = read_rds("D:/Dropbox/WUR/Rscripts/paper_2/models_response_ini2/xgboost_response_ini2_.rds") # ("xgboost_stage_log_500_sigma.rds")
+# model performance
+y_var = extract_preprocessor(model_decay)[[2]]%>%
+    as.character()
+explainers = explain(
+      model_decay,
+      label = y_var,
+      data = model_decay$testing%>%select(-all_of(y_var)),
+      y = model_decay$testing[[y_var]],
+      predict_function = custom_predict,
+      verbose = FALSE
+  )
+
+# y - yhat plot
+diagnostics_xgb = model_diagnostics(explainers)%>%
+      select(y, y_hat, label)%>%
+      as.data.table()
+diagnostics_xgb[, ":="(y = 10^(y),
+                   y_hat = 10^(y_hat))]
+# quant_percent_xgb = quantreg::rq(y~y_hat-1, data = diagnostics_xgb, tau = c(0.05,0.95))
+# quant_percent_xgb = round(quant_percent_xgb$coefficients,2)*100
+quant_percent_xgb = diagnostics_xgb[, quantile(y/y_hat, c(0.1,0.9))%>%round(2)]*100
+
+performance_xgb = diagnostics_xgb[,.(RMSE = rmse_vec(y, y_hat)%>%round(3),
+                                 Rsq = rsq_vec(y, y_hat)%>%round(2),
+                                 MAE = mae_vec(y, y_hat)%>%round(3),
+                                 MAPE = mape_vec(y, y_hat)%>%round(2),
+                                 model = "XGBoost")]
+```
+
+### Machine Learning estimates
+
+XGBoost predicts the volume of the transient MAR-response based on the recharge rate applied at the site and averaged geo-hydrological properties around the site, as described in @sec-data-preparation. The MAR-response typically falls within `r paste0(quant_percent_xgb, collapse = "% to ")`% (10^th^ and 90^th^ percentile) of the response simulated with the numerical model. XGBoost is more accurate at predicting low MAR-response while underestimating high response (@fig-y-y_hat_all B). This could be due to the log transformation of the MAR-response before training the XGBoost model. Transforming the response helps reduce the bias in the trained model due to the right skew in the distribution of the MAR-response from the simulated scenarios. Even though the predictions show bias, XGBoost performs well overall, achieving a Mean Absolute Error (MAE) of `r round(performance_xgb$MAE/1e6, 2)` M m^3^ (million m^3^), a Mean Absolute Percent Error (MAPE) of `r performance_xgb$MAPE`% with a coefficient of determination (R^2^) of `r performance_xgb$Rsq`.
+
+```{r}
+# Accuracy accross various thresholds (based on metrics)
+# Response >1cm, >5cm, and >10cm
+diagnostics_UNET = fread("diagnostics_UNET.csv")
+#setnames(diagnostics_UNET, c("Transient", "Stationary"), c("Transient", "UNet"))
+setnames(diagnostics_UNET, c("Transient", "Stationary"), c("y", "y_hat"))
+
+quant_percent_UN = diagnostics_UNET[, quantile(y/y_hat, c(0.1,0.9))%>%round(2)]*100
+quant_percent_UN2 = diagnostics_UNET[y > 0.25e6, quantile(y/y_hat,c(0.1,0.9))%>%round(2)]*100
+
+performance_UNET = diagnostics_UNET[,.(RMSE = rmse_vec(y, y_hat)%>%round(3),
+                                       Rsq = rsq_vec(y, y_hat)%>%round(2),
+                                       MAE = mae_vec(y, y_hat)%>%round(3),
+                                       MAPE = mape_vec(y, y_hat)%>%round(2),
+                                       model = "U-Net"
+)]
+```
+
+U-Net predicts the response in each cell in the catchment based on 2-D inputs of geo-hydrological properties. Unlike the Gaussian kernel used to represent the properties around the recharge sites for XGBoost, U-Net learns to extract relevant features of the inputs during the model training process. The MAR-response simulated by the numerical model ranges between `r paste0(quant_percent_UN, collapse = "% and ")`%of the predicted response by U-net. However, U-Net tends to underestimate low responses, as observed in four of the 120 sites tested. When focusing on sites with responses greater than 0.25 M m3, the upper bound of the range decreases significantly from `r quant_percent_UN[2]`% to `r quant_percent_UN2[2]`%, indicating a better accuracy for large responses. Despite these occasional inaccuracies, particularly for low responses, U-Net achieves better overall performance than XGBoost, with a MAE of `r round(performance_UNET$MAE/1e6, 2)` M m^3^, a MAPE of `r performance_UNET$MAPE`%, and an R^2^ of `r performance_UNET$Rsq`.
+
+```{r}
+#| label: fig-y-y_hat_all
+#| fig-cap: Modelled vs Predicted MAR-response for recharge sites used to test the ML models. A linear fit through the points, coloured dotted line, is added in the plot depicting the trend of the points along with a black solid line showing one-one relation.
+
+dat_tmp = model_diagnostics(explainers)
+setDT(dat_tmp)
+
+y_hat_dat = dat_tmp[,.(recharge, area_site, y = 10^y, y_hat = 10^y_hat, label = "XGBoost")]
+y_hat_dat = rbind(y_hat_dat,
+                  diagnostics_UNET[,.(recharge, area_site, y, y_hat, label = "U-Net")])
+
+# y-yhat plot for total response
+most_common = y_hat_dat[,.N, .(recharge, area_site)][N>1]
+plot_dat = y_hat_dat#[most_common, on = .(recharge,area_site)]
+plot_dat%>%
+  ggplot(aes(y/1e6, y_hat/1e6, color = label))+
+  geom_point(alpha = 0.5)+
+  geom_smooth(formula = y~x-1, method = 'lm', se = F)+
+  geom_abline(aes(linetype = 'one to one', slope = 1, intercept = 0))+
+  scale_linetype_manual(values = c("one to one" = "solid"))+
+  labs(linetype = "",
+       x = bquote("Simulated MAR response [M "*m^3*"]"),
+       y = bquote("Predicted MAR response [M "*m^3*"]"),
+       color = "")+
+  facet_grid(cols = vars(label))+
+  tag_facets(tag_pool = LETTERS)+
+  common_theme+
+  NULL
+# ggsave("D:/Dropbox/WUR/Rscripts/paper_2/ini_total_y-hat.png", width = 6, height = 6, units = "in", dpi = 300)
+
+```
+
+### Informative features
+
+Obviously, among the inputs, the recharge site area and the recharge rate have the most substantial impact on the MAR-response, as illustrated in @fig-SHAPintial_response2. This is evident from the wide range of SHAP values for these inputs to the XGBoost model. A high recharge rate and large site area correspond with a greater MAR-response, as expected, given the larger volume of water to be recharged from these sites. Additionally, among the other properties, the surface water network and the groundwater depth explain most of the variation in the MAR-response. Transmissivity, vertical resistance and drain conductance have the least impact on the MAR-response. Furthermore, all inputs are positively correlated with the MAR-response except for the properties of the surface water network - river density, river conductance, and drain conductance, as seen in @fig-SHAPintial_response2, which in general means that more extensive drainage networks leads to lower MAR response.
+
+```{r}
+#| label: SHAPintial_response
+
+xgb_fit = extract_fit_parsnip(model_decay)$fit
+X_train = model_decay$training%>%
+  select(-all_of(y_var))%>%
+  as.matrix
+X_test = model_decay$testing%>%
+  select(-all_of(y_var))%>%
+  as.matrix
+
+
+shp = shapviz(xgb_fit, X_pred = X_train, interaction = TRUE)
+# transform the SHAP values from log to exp
+# the y values are log transformed, for training the model
+# Converting the total response from m^3 to million m^3 at the same time
+# Also convert the site area from m^2 to km^2
+shp$S = 10^shp$S
+shp$S_inter = 10^shp$S_inter
+shp$baseline = 10^shp$baseline/1e6
+shp$X = shp$X%>%
+  mutate(area_site = area_site/1e6)
+
+new_colnames = c("Recharge", "Site Area", "Transmissivity", "Groundwater depth", "Vertical Resistance", "River Conductance", "Drain Conductance", "River Density")
+
+colnames(shp) = new_colnames
+shp_mar_response = shp
+```
+
+The SHAP values of the MAR-response show a near-linear relation to the site design parameters, area of the recharge site and recharge rate applied at the site (@fig-SHAPintial_response2 A and B). These parameters affect the total recharge volume applied, which is a product of the recharge rate and the area of the recharge site. Logically, a higher total recharge would lead to a larger response as reflected in the identified relation. However, the effect of increasing the size of the recharge site is not perfectly linear but it shows a decreasing benefit, especially for sites larger than 0.5 km^2^ (@fig-Analyze_site_area A). Similarly, increasing the recharge rate beyond 15 mm/day shows a decreasing benefit in the response (@fig-Analyze_site_area B). This suggests that multiple small sites could be more beneficial to maximize the water stored in the subsurface than a single large recharge site.
+
+Following the site design parameters, the properties of the surface water network have the biggest impact on the MAR-response (@fig-SHAPintial_response2 C, E and H). Low river density is related to a high MAR-response, resulting in a maximum of 50% higher response than the average recharge site simulated. A higher river density than 0.05 leads to a decreasing response, with a rapid initial decrease which gradually reaches a minimum. Sites with a river density of more than 0.2 have 10 to 20% lower response than a site with a river density of 0.1. Together this indicates that an extensive surface water network more effectively drains the recharged water, diminishing the MAR-response. River conductance also has a similar impact, with sites near streams with a river bottom conductance of less than 2 m2/day having a 20% higher MAR-response. The MAR-response then decreases exponentially with increasing river conductance, up to 15 m2/day. A high river conductance leads to a similarly low response of 30% lower MAR-response than the average predicted MAR-response, $10^{\hat{y}_0}$ in equation @eq-SHAP_prod. These high river conductances are primarily associated with large rivers due to their larger wetted perimeter, resulting in a much larger draining capacity. Tile drainage has a minor impact on the response, ranging from 5% higher to 10% lower MAR-response. Recharge sites near fields with a low drain conductance have a higher MAR-response than those with a higher drain conductance. However, fields with tile drainage are not common in the study area decreasing the reliability of the identified relation.
+
+The groundwater depth is a unique input feature as it is the result of groundwater flow that is determined by multiple system characteristics, such as river density, river stage, and transmissivity. It also determines the available storage space for the MAR-response, acting as a limiting factor when groundwater levels are within 3 m (@fig-SHAPintial_response2 E). The MAR-response at these sites varies between 20% lower to 40% higher than the average predicted MAR-response. Interestingly, about 95% of the recharge sites have a maximum head increase of less than 3 m. It is worth noting that this characteristic of the response was not known by the model apriori, but was identified while being trained to predict a different target. In areas with deeper groundwater levels, groundwater depth has minimal impact on the MAR-response.
+
+While it is possible that the groundwater heads do not increase beyond 3 m within five months of artificial recharge due to the recharge rates considered and the transmissivity of the aquifer, it is most likely a result of the characteristics of the groundwater depth within the study area. The groundwater is within 3 m from the ground level in 98% of the study area. Applying a similar methodology at another study area with deeper groundwater levels would likely show a continuation of the linear trend identified. Based on this, we can extrapolate that sites with deeper groundwater levels are always preferred when selecting artificial recharge sites.
+
+Among the inputs compared, the aquifer properties have the smallest impact on the MAR-response (@fig-SHAPintial_response2 F and G). In general, MAR-response increases with transmissivity as it enables the spread of the response away from the recharge site, saturating a wider extent of the aquifer. Sites in poorly transmissive soil can have up to 15% lower MAR-response than the average predicted MAR-response, while moderate transmissivity, 250 m2/day to 1000 m2/day has a 5 to 10% lower response. The MAR-response increases for more transmissive aquifers, up to 1300 m2/day, resulting in up to 7.5% higher response. Further increases in transmissivity, up to 3000 m2/day, has a minor impact on the response. Vertical resistance has a minor but highly non-linear impact on the response, with low vertical resistance related to a smaller MAR-response, up to 8% lower response, and high resistance resulting in a high MAR-response, up to 8% higher.
+
+```{r}
+#| label: fig-SHAPintial_response2
+#| fig-cap: SHAP values of the inputs to the XGBoost model trained excluding specific yield from the inputs. SHAP values > 1 indicate that the feature at the recharge site contributed to a higher MAR-response compared to the average MAR-response for all training sites. Conversely, SHAP values < 1 indicate that the feature decreased the MAR-response
+
+#order the columns by their importance
+# col_order_ini = (shp$S-1)%>%abs()%>%colMeans()
+# col_order = read_lines("D:/Dropbox/WUR/Rscripts/paper_2/col_importance_order.txt")
+col_order_sy = list(names = c(
+    "Site Area",
+    "Recharge",
+    "Specific Yield",
+    "River Conductance",
+    "Groundwater depth",
+    "River Density",
+    "Vertical Resistance",
+    "Transmissivity",
+    "Drain Conductance"),
+    labels = c(
+        bquote("Site Area ["~km^2~"]"),
+        bquote("Recharge ["~mm~"]"),
+        bquote("SY ["~-~"]"),
+        bquote("River cond. ["~m^2/day~"]"),
+        bquote("Grwt. depth ["~m~"]"),
+        bquote("River den. ["~-~"]"),
+        bquote("V. res. ["~days~"]"),
+        bquote("Trans. ["~m^2/day~"]"),
+        bquote("Drain cond. ["~m^2/day~"]")
+    ))
+col_order = list(names = c(
+    "Site Area",
+    "Recharge",
+    "River Conductance",
+    "Groundwater depth",
+    "River Density",
+    "Vertical Resistance",
+    "Transmissivity",
+    "Drain Conductance"),
+    labels = c(
+        bquote("Site Area ["~km^2~"]"),
+        bquote("Recharge ["~mm~"]"),
+        bquote("River cond. ["~m^2/day~"]"),
+        bquote("Grwt. depth ["~m~"]"),
+        bquote("River den. ["~-~"]"),
+        bquote("V. res. ["~days~"]"),
+        bquote("Trans. ["~m^2/day~"]"),
+        bquote("Drain cond. ["~m^2/day~"]")
+    ))
+
+# maintain the same ylim
+range_SHAP = range(shp$S)
+range_SHAP = round(range_SHAP, 1)
+
+p = sv_dependence(shp, v = col_order$names, color_var = NULL, interactions = TRUE)+
+  patchwork::plot_spacer()
+
+p_final = NULL
+counter = 1
+for (p_lot in p$patches$plots){
+  if (is.null(p_final)){
+    p_final = p_lot+
+      tag_facets(tag_pool = LETTERS[counter:26])+
+        xlab(col_order$labels[[counter]])
+    
+  }else{
+    p_final = p_final +
+      p_lot+
+      tag_facets(tag_pool = LETTERS[counter:26])+
+        xlab(col_order$labels[[counter]])
+
+  }
+  counter = counter+1
+}
+p_final[[6]] = p_final[[6]]+ 
+  scale_x_continuous(breaks = c(50000, 100000, 150000))
+p_final = p_final+ 
+  patchwork::plot_layout(ncol = 3, axis_titles = "collect_y")&
+  coord_cartesian(ylim = range_SHAP, expand = F)&
+#   geom_smooth(method = 'loess', span = 0.3, formula = y~x, se = F, color = 'red', alpha = 0.1)&
+  common_theme &
+  theme(axis.title=element_text(size=10))&
+  labs(title = "",
+       y = "")
+
+y.grob = grid::textGrob("SHAP value for MAR-response [multiplier]",
+                        gp = grid::gpar(fontsize=12), rot=90)
+gridExtra::grid.arrange(
+  patchworkGrob(p_final),
+  left = y.grob
+)
+# ggsave("D:/Dropbox/WUR/Rscripts/paper_2/Input_vs_SHAP_ini_total.png", width = 6, height = 6, units = "in", dpi = 300)
+
+```
+
+### Effect of Specific yield on the MAR-response
+
+Including specific yield as an input improved the predictability of the MAR-response. This is a reflection of this input's importance in transient scenarios. Interestingly, including specific yield improved the Root Mean Squared Error, RMSE, more than the Mean Absolute Error, MAE, and the Mean Absolute Percent Error, MAPE. As RMSE is more sensitive to large errors, adding specific yield especially reduced these errors suggesting that the model trained with specific yield makes fewer or smaller large errors. Since achieving a high MAR-response is a desirable outcome when optimizing MAR sites, these improvements are particularly beneficial for improving the model's predictive power.
+
+```{r}
+#| label: tbl-xgb_performance_sto
+#| tbl-cap: Model performance when including Specific Yield (SY) as an input to the model.
+
+# Load models
+model_ini_paths = list.files("../paper_2", pattern = "ini2_(stobaseline)?.rds", recursive = T, full.names = T)
+model_decay_paths = list.files("../paper_2", pattern = "decay2_(stobaseline)?.rds", recursive = T, full.names = T)
+# Calculate the model performances and rbind them
+i = model_ini_paths[1]
+all_model_paths = c(model_ini_paths, model_decay_paths)
+performances = lapply(all_model_paths, function(i){
+    mod = read_rds(i)
+    y_var = extract_preprocessor(mod)[[2]]%>%
+        as.character()
+    explainers = explain(
+          mod,
+          label = y_var,
+          data = mod$testing%>%select(-all_of(y_var)),
+          y = mod$testing[[y_var]],
+          predict_function = custom_predict,
+          verbose = FALSE
+      )
+    
+    # y - yhat plot
+    mod_diagnostics = model_diagnostics(explainers)%>%
+          select(y, y_hat, label)%>%
+          as.data.table()
+    mod_diagnostics[, ":="(y = 10^(y),
+                           y_hat = 10^(y_hat))]
+    mod_performance = mod_diagnostics[,.(RMSE = rmse_vec(y, y_hat)%>%signif(3),
+                                         Rsq = rsq_vec(y, y_hat)%>%signif(2),
+                                         MAE = mae_vec(y, y_hat)%>%signif(3),
+                                         MAPE = mape_vec(y, y_hat)%>%signif(2),
+                                         Inputs = str_detect(i, "stobaseline")%>%
+                                             ifelse("With SY", "Without SY"),
+                                         target = str_detect(y_var, "initial")%>%
+                                             ifelse("MAR-response", "Decay Coefficient"),
+                                         Characteristics = str_detect(y_var, "water")%>%
+                                             ifelse("Water Stored in Response", "Head Response")
+                                         
+    )]
+    mod_performance
+})%>%
+    rbindlist()
+# clean it
+performances[target=="MAR-response", ":="(  RMSE = RMSE/1e6,
+                                            MAE = MAE/1e6)]
+performances = performances[Characteristics == "Head Response"]
+performances[, Characteristics := NULL]
+
+# Group the data (if necessary)
+table_data <- performances %>%# Pivot wider
+  pivot_wider(names_from = target, values_from = c(RMSE, Rsq, MAPE, MAE), names_repair = "minimal")%>%
+  relocate(Inputs, contains("MAR"), contains("Decay"))
+
+# Rename columns for RMSE, R^2^, MAPE, MAE
+col_names = names(table_data)%>%
+    str_extract("^.*(?=_)")
+col_names[1] = ""
+col_names = as.list(col_names)
+names(col_names) = names(table_data)
+
+# Create the flextable
+ft = flextable(table_data)%>%
+# Add spanners for Decay Coefficient and MAR-response columns
+  add_header_row(
+    values = c("Inputs", "MAR-response", "Decay Coefficient"),
+    colwidths = c(1, length(grep("MAR", names(table_data))), length(grep("Decay", names(table_data)))))%>%
+  set_header_labels(
+  values = col_names
+)
+# Adjust Rsq to R^2^
+ft <- compose(
+  ft, 
+  part = 'header',
+  i = 2,
+  j = c(3,7),
+  value = as_paragraph("R", as_sup("2"))
+)
+
+# Adjust column widths to fit content
+# Set the table to full width
+ft <- set_table_properties(ft, width = 1, layout = "autofit")
+
+# Print the table
+ft%>%
+  theme_vanilla()%>%
+  # bold(i = ~!is.na(Characteristics))%>%
+  align(i = 1, align = "center", part = "header")%>%
+  vline(j = c( 1, 5, 9))%>%
+  vline_left()%>%
+  hline(i = 1, border = fp_border_default(width = 0), part = "header")%>%
+  fix_border_issues()
+```
+
+Based on the SHAP values, we can explain the effects of specific yield on the relations identified by XGBoost. A high specific yield, more than 0.17, leads to a higher MAR-response, leading to an increase of up to 75% of the average prediction. Sites where the specific yield exceeds 0.1 demonstrate a markedly higher MAR-response, changing from a 12% decrease to a 50% increase for specific yields between 0.1 and 0.17. However, this relation does not backed by theory, as a high specific yield should lead to a smaller increase in the heads to the same recharge. For a better explanation, a ML perspective could be insightful. Specifically, the effect of multicollinearity becomes apparent: the inclusion of specific yield reduced the importance of groundwater depth and river density. These variables are correlated with specific yield complicating the interpretation of the relations. Locations with a shallow groundwater level are generally wetter due to processes such as capillary rise (see Appendix 2) resulting in a lower specific yield. The effect of these variables, groundwater depth and river density, on the MAR-response can be explained in theory suggesting that the large impact of specific yield is likely a result of the specific yield being correlated with the other two features while also being more closely correlated to the MAR-response. This would cause XGBoost to over-emphasize the influence of the specific yield over the two inputs with a direct relation.
+
+Including specific yield as an input to the model thus reduced the effect of river density on the MAR-response. Sites with a river density of less than 0.05 have an up to 20% higher MAR-response, which is a reduction from a 40% higher response based on the SHAP values from the model that excludes specific yield from the inputs. As shown in Figures 16, and 17 in the Appendix, regions with a higher river density also have the generally wetter condition in their root zone, reducing the specific yield. On the contrary, deeper groundwater indicates dryer conditions resulting in a higher specific yield. Areas with groundwater levels deeper than 2.5 m have a 20% higher MAR-response, which is a reduction from a 50% higher response based on the SHAP values from the model that excludes specific yield. Interestingly, the limit identified by XGBoost has also reduced from 3 m to 2.5 m depth with the inclusion of specific yield.
+
+Overall, including specific yield improves the accuracy of the model even though the input is correlated with multiple other system properties. This would likely have minimal influence on the generalizability of the predictions from XGBoost as it is a decision tree based model which is not affected by multicollinearity [@piramuthu_input_2008; @kotsiantis_decision_2013; @chen_xgboost_2016]. However, the learnt relations are affected by multicollinearity, where the most informative input is attributed with the highest importance. Based on the SHAP values, river density and groundwater depth have a similar importance while the specific yield has a higher importance than the two. This suggests that while specific yield is the most informative input, groundwater depth and river density have their independent influence on the MAR-response.
+
+```{r}
+#| label: fig-SHAPintial_response_po
+#| fig-cap: SHAP values of the inputs to the XGBoost model trained with specific yield along with other inputs. SHAP values > 1 indicate that the feature at the recharge site contributed to a higher MAR-response compared to the MAR-response for all training sites. Conversely, SHAP values < 1 indicate that the feature decreased the MAR-response.
+
+model_ini_po = read_rds("D:/Dropbox/WUR/Rscripts/paper_2/models_response_ini2/xgboost_response_ini2_stobaseline.rds") # ("xgboost_stage_log_500_sigma.rds")
+
+xgb_fit = extract_fit_parsnip(model_ini_po)$fit
+X_train = model_ini_po$training%>%
+  select(-all_of(y_var))%>%
+  as.matrix
+X_test = model_ini_po$testing%>%
+  select(-all_of(y_var))%>%
+  as.matrix
+
+
+shp = shapviz(xgb_fit, X_pred = X_train, interaction = TRUE)
+# transform the SHAP values from log to exp
+# the y values are log transformed, for training the model
+# Converting the total response from m^3 to million m^3 at the same time
+# Also convert the site area from m^2 to km^2
+shp$S = 10^shp$S
+shp$S_inter = 10^shp$S_inter
+shp$baseline = 10^shp$baseline/1e6
+shp$X = shp$X%>%
+  mutate(area_site = area_site/1e6)
+
+new_colnames = c("Recharge", "Site Area", "Transmissivity", "Groundwater depth", "Vertical Resistance", "River Conductance", "Drain Conductance", "River Density", "Specific Yield")
+
+colnames(shp) = new_colnames
+
+# maintain the same ylim
+range_SHAP = range(shp$S)
+range_SHAP = round(range_SHAP, 1)
+
+p = sv_dependence(shp, v = col_order_sy$names, color_var = NULL, interactions = TRUE)+
+  patchwork::plot_spacer()
+
+p_final = NULL
+counter = 1
+for (p_lot in p$patches$plots){
+  if (is.null(p_final)){
+    p_final = p_lot+
+      tag_facets(tag_pool = LETTERS[counter:26])+
+        xlab(col_order_sy$labels[[counter]])
+    
+  }else{
+    p_final = p_final +
+      p_lot+
+      tag_facets(tag_pool = LETTERS[counter:26])+
+        xlab(col_order_sy$labels[[counter]])
+
+  }
+  counter = counter+1
+}
+
+p_final[[7]] = p_final[[7]]+ 
+  scale_x_continuous(breaks = c(50000, 100000, 150000))
+
+p_final = p_final+ 
+  patchwork::plot_layout(ncol = 3, axis_titles = "collect_y")&
+  coord_cartesian(ylim = range_SHAP, expand = F)&
+#   geom_smooth(method = 'loess', span = 0.3, formula = y~x, se = F, color = 'red')&
+  common_theme &
+  theme(axis.title=element_text(size=10))&
+  labs(title = "",
+       y = "")
+
+y.grob = grid::textGrob("SHAP value for MAR-response [multiplier]",
+                        gp = grid::gpar(fontsize=12), rot=90)
+gridExtra::grid.arrange(
+  patchworkGrob(p_final),
+  left = y.grob
+)
+
+# ggsave("D:/Dropbox/WUR/Rscripts/paper_2/Input_vs_SHAP_ini_total.png", width = 6, height = 6, units = "in", dpi = 300)
+
+```
+
+```{r}
+#| label: fig-MAR-response-with-po
+#| fig-cap: Scatter of the actual and predicted MAR-response from XGBoost trained with the specific yield - Consider adding this
+
+y_hat_with_po = model_ini_po%>%
+    explain(
+        label = y_var,
+        data = .$testing%>%select(-all_of(y_var)),
+        y = .$testing[[y_var]],
+        predict_function = custom_predict,
+        verbose = FALSE
+    )%>%
+    model_diagnostics()%>%
+    select(y,y_hat,label)
+```
+
+## Decay coefficient
+
+The decay coefficient describes the rate at which the volume of extra storage decreases over time per volume of extra storage, due to return flow to the surface water network. As groundwater levels approach those in the natural, baseline scenario, the drainage of groundwater gradually decreases. In this study, artificial recharge is stopped on 1^st^ March 2012 and will resume from 1^st^ October 2012, representing 219 days without artificial recharge. For example, if the decay coefficient is greater than $k = - \frac{\log 0.2} {219} \approx 0.0073$ per day, the stored volume of water will decay to less than 20% of the initial volume of stored water at the end of the 219 days (see @eq-linear-reservoir-dqS). It is important to note the inverse relation between the decay coefficient and the water remaining in the subsurface on 1st October 2012. Of the 720 randomly selected hypothetical recharge sites used for training the model, only 52 have a lower decay rate than `r signif(log(0.2)/219*-1, 2)` per day. This emphasizes the importance of optimization to identify site locations better suited for artificial recharge.
+
+```{r}
+library(dplyr)
+library(data.table)
+library(lubridate)
+library(ggplot2)
+library(tagger)
+library(cowplot)
+library(tidyverse)
+library(tidymodels)
+library(purrr)
+library(furrr)
+library(DALEX)
+library(stringr)
+library(shapviz)
+library(patchwork)
+source("functions.R")
+
+
+common_theme = list(
+  theme_light(),
+  theme(text=element_text(size=12), 
+        axis.text=element_text(size=8, color = 'black'),
+        axis.title=element_text(size=12),
+        plot.title=element_text(size=12),
+        legend.text=element_text(size=12),
+        legend.title=element_text(size=12), 
+        legend.position = 'bottom',
+        strip.background = element_blank(),
+        strip.text = element_blank(),
+        tagger.panel.tag.text = element_text(size = 8, color = 'black', face = 'bold'),
+        tagger.panel.tag.background = element_rect(fill = "white", color = 'grey'),
+        legend.key.width = unit(1, units = "cm")
+        )
+)
+
+model_path = "D:/Dropbox/WUR/Rscripts/paper_2/models_response_decay2/xgboost_response_decay2_.rds"
+model_decay = readr::read_rds(model_path)
+
+y_var = extract_preprocessor(model_decay)[[2]]%>%
+    as.character()
+
+
+explainers = explain(
+      model_decay,
+      label = y_var,
+      data = model_decay$testing%>%select(-all_of(y_var)),
+      y = model_decay$testing[[y_var]],
+      predict_function = custom_predict,
+      verbose = FALSE
+  )
+
+diagnostics_xgb = model_diagnostics(explainers)%>%
+      select(y, y_hat, label)%>%
+      as.data.table()
+diagnostics_xgb[, ":="(y = 10^(y),
+                       y_hat = 10^(y_hat))]
+
+quant_percent_xgb = diagnostics_xgb[, quantile(y/y_hat, c(0.1,0.9))%>%round(2)]*100
+quant_percent_xgb_low = diagnostics_xgb[
+  y<=log(0.2)/219*-1,
+  quantile(y/y_hat, c(0.1,0.9))%>%round(2)*100
+]
+quant_percent_xgb2 = diagnostics_xgb[y<=round(log(0.2)/219*-1, 3)&y_hat!=0.01581479, 
+                                     .(RMSE = rmse_vec(y, y_hat)%>%signif(2),
+                                       Rsq = rsq_vec(y, y_hat)%>%signif(2),
+                                       MAE = mae_vec(y, y_hat)%>%signif(2),
+                                       MAPE = mape_vec(y, y_hat)%>%signif(2),
+                                       model = "XGBoost")]
+
+
+performance_xgb = diagnostics_xgb[,.(RMSE = rmse_vec(y, y_hat)%>%signif(2),
+                                 Rsq = rsq_vec(y, y_hat)%>%signif(2),
+                                 MAE = mae_vec(y, y_hat)%>%signif(2),
+                                 MAPE = mape_vec(y, y_hat)%>%signif(2),
+                                 model = "XGBoost")]
+
+```
+
+### Machine Learning estimates
+
+XGBoost can accurately predict the decay rate of the modelled response. The decay rate is within `r paste0(quant_percent_xgb, collapse = "% to ")`% of the predicted decay rate, while not showing a systematic bias, as evidenced in @fig-y-y_hat_decay. The MAE of the trained model is `r performance_xgb$MAE` m, MAPE is `r performance_xgb$MAPE`% and an R^2^ of `r performance_xgb$Rsq`. Relative to the MAR-response, the decay coefficient proved to be more difficult to predict. The model has a lower R^2^, but also a lower MAPE suggesting that while the model does not explain all the variance in the data, it is more accurate at predicting low decay coefficient resulting in a lower MAPE. This combination suggests that the trained XGBoost models are especially accurate at identifying efficient recharge sites, with high MAR-response and low decay coefficient.
+
+```{r}
+#| label: fig-y-y_hat_decay
+#| fig-cap: Modelled vs Predicted decay rate for recharge sites used to test the models. A linear fit through the points, coloured line, along with a black solid line showing one-one relation is added in the plot depicting the trend of the points.
+
+diagnostics_xgb[y<=quantile(y,0.95)]%>%
+  ggplot(aes(y, y_hat, color = "XGBoost"))+
+  geom_point(alpha = 0.5)+
+  geom_smooth(formula = y~x-1, method = 'lm', se = F)+
+  geom_abline(aes(linetype = 'one to one', slope = 1, intercept = 0))+
+  scale_linetype_manual(values = c("one to one" = "solid"))+
+  scale_color_manual(values = c("XGBoost" = "#00BFC4"))+
+  labs(linetype = "",
+       x = "Decay Coefficient [per day]",
+       y = "Predicted Decay Coefficient \n[per day]",
+       color = "")+
+  common_theme+
+  NULL
+
+# ggsave("D:/Dropbox/WUR/Rscripts/paper_2/decay_total_y-hat.png", width = 4, height = 6, units = "in", dpi = 300)
+```
+
+### Informative features
+
+Different inputs are the most informative for the decay coefficient relative to the MAR-response. The design parameters, which are the site area and recharge rate, mostly have a minor effect on the decay coefficient while they strongly affect the MAR-response. However, small sites of less than 0.1 km2 have a drastically higher decay rate, as seen in @fig-SHAP-decay A. To conceptualize this phenomenon that affects the response in three dimensions in a two-dimensional framework, the MAR-response can be likened to the area of a circle where the surface water network acts on the perimeter of this circle. Larger MAR-responses correspond to circles with greater areas. As the area increases, the perimeter also expands, but at a slower rate relative to the area. Consequently, larger MAR-responses are less influenced by external factors, such as rivers and drains, much like how a larger circle has a relatively smaller perimeter compared to its area. This effect of small sites makes site area the third most important input after groundwater depth and river conductance.
+
+The average summer groundwater depth has the biggest impact on the decay coefficient. Sites with a shallow groundwater level, of less than 1.5 m, have a higher decay rate than the sites with deeper groundwater. After groundwater depth, river conductance is the next most influential variable. A low river conductance around the site is related to a lower decay coefficient. Regions with an average river conductance of more than 5 m^2^/day have 25% higher decay rate than the average predicted decay coefficient. River density has a similar relation, which is the fifth most influential variable.Regions with a river density of more than 0.15 have a 5% to 10% higher decay coefficient. Together these inputs capture a similar relation where shallow groundwater level could cause the surface water network to be more influential even for small increases in the groundwater level. The groundwater stored at these locations is drained to the surface water as a return flow, increasing the decay coefficient.
+
+Aquifer properties have a bigger impact on the decay coefficient than on the MAR-response. The vertical resistance below the top-most aquifer is the fourth most impactful input. Regions with only one aquifer tend to have a 5% to 10% lower decay coefficient, as in @fig-SHAP-decay F. These locations are represented by a very high vertical resistance of 171,000 days representing the basement composed of the clayey Breda formation. Interestingly, the regions with multiple aquifers have a 10% higher decay coefficient. A low transmissivity is associated with a lower decay coefficient, @fig-SHAP-decay F. It decreases the spread of groundwater resulting in lower drainage flux to the surrounding surface water network. A transmissivity of more than 700 m2/day leads to a 5% to 12% higher decay coefficient compared to the average predicted decay coefficient (i.e. SHAP = 1).
+
+```{r}
+#| label: fig-xgb_shap_beeswarm
+xgb_fit = extract_fit_parsnip(model_decay)$fit
+X_train = model_decay$training%>%
+  select(-all_of(y_var))%>%
+  as.matrix
+X_test = model_decay$testing%>%
+  select(-all_of(y_var))%>%
+  as.matrix
+
+# Calculate SHAP values with interaction for when needed
+shp = shapviz(xgb_fit, X_pred = X_train, interaction = TRUE)
+
+# transform the SHAP values from log to exp
+# the y values are log transformed, for training the model
+# Converting the total response from m^3 to million m^3 at the same time
+# Also convert the site area from m^2 to km^2
+shp$S = 10^shp$S
+shp$S_inter = 10^shp$S_inter
+shp$baseline = 10^shp$baseline
+shp$X = shp$X%>%
+  mutate(area_site = area_site/1e6)
+
+new_colnames = c("Recharge", "Site Area", "Transmissivity", "Groundwater depth", "Vertical Resistance", "River Conductance", "Drain Conductance", "River Density")
+colnames(shp) = new_colnames
+```
+
+```{r}
+#| label: fig-SHAP-decay
+#| fig-cap: SHAP values of the inputs to the XGBoost model trained excluding specific yield from the inputs. SHAP values > 1 indicate that the feature at the recharge site contributed to a higher decay coefficient compared to the average decay coefficient for all training sites. Conversely, SHAP values < 1 indicate that the feature slowed the decay of the response
+# maintain the same ylim
+range_SHAP = range(shp$S)
+range_SHAP = round(range_SHAP, 1)
+
+p = sv_dependence(shp, v = col_order$names, color_var = NULL, interactions = T)+
+  patchwork::plot_spacer()
+
+
+p_final = NULL
+counter = 1
+for (p_lot in p$patches$plots){
+  if (is.null(p_final)){
+    p_final = p_lot+
+      tag_facets(tag_pool = LETTERS[counter:26])+
+        xlab(col_order$labels[[counter]])
+    
+  }else{
+    p_final = p_final +
+      p_lot+
+      tag_facets(tag_pool = LETTERS[counter:26])+
+        xlab(col_order$labels[[counter]])
+
+  }
+  counter = counter+1
+}
+
+p_final = p_final+ 
+  patchwork::plot_layout(ncol = 3, axis_titles = "collect_y")&
+  coord_cartesian(ylim = range_SHAP, expand = F)&
+  # geom_smooth(method = 'loess', span = 0.3, formula = y~x, se = F, color = 'red')&
+  common_theme &
+  theme(axis.title=element_text(size=10))&
+  labs(title = "",
+       y = "")
+p_final[[6]] = p_final[[6]] + 
+  scale_x_continuous(breaks = c(50000, 100000, 150000))
+
+y.grob = grid::textGrob("SHAP value for decay coefficient [multiplier]",
+                        gp = grid::gpar(fontsize=12), rot=90)
+  
+gridExtra::grid.arrange(
+  patchworkGrob(p_final),
+  left = y.grob
+)
+# ggsave("D:/Dropbox/WUR/Rscripts/paper_2/Input_vs_SHAP_decay_total.png", width = 6, height = 6, units = "in", dpi = 300)
+
+```
+
+```{r}
+#ggsave("Input_vs_SHAP_decay2_.png",
+#       dpi = 300, width = 6, height = 6, units = "in")
+```
+
+### Effect of Specific yield on the decay coefficient
+
+Including the specific yield among the inputs improved the performance of the model, see @tbl-xgb_performance_sto. The model improved on all metrics: RMSE, R^2^, MAPE, and MAE by between 8% and 19%. Interestingly, the MAE improved more than the RMSE suggesting that the improvements are mostly at sites with a low decay coefficient.
+
+Sites with a high specific yield have a low decay coefficient. A high specific yield decreases the reaction of groundwater heads to fluxes in the groundwater. The same effect of specific yield also reduces the decay of the response in the period without artificial recharge. XGBoost identified this relation, predicting sites with a specific yield of less than 0.1 have a 40% higher decay coefficient. At the other extreme, sites with a high specific yield of more than 0.19 have a 25% lower decay coefficient. The decay coefficient decreases linearly between these two extremes. However, the constant effect at the extremes could be due to the tree based architecture of XGBoost which results in lower sensitivity at the extremes of the input features. A continuous linear effect of specific yield could be expected if the model was trained with more sites at these extremes.
+
+As the specific yield is correlated to the groundwater depth and the river density, the SHAP values for these two inputs are also affected. The range of SHAP values related to these two inputs decreased compared to the values for the model without specific yield, indicating a smaller influence of these inputs. The effect of shallow groundwater decreased dramatically due to the inclusion of specific yield among the inputs. The low specific yield at locations with shallow groundwater explains the suddenly higher decay coefficient at these sites. All sites with a groundwater level within 2 m of the soil surface have a similar 10% higher decay coefficient . Based on the SHAP values, the river density has almost no influence on the decay coefficient, suggesting that the lower specific yield near the rivers explains most of the influence of the river density.
+
+```{r}
+#| label: fig-xgb_shap_por
+#| fig-cap: SHAP values of the inputs to the XGBoost model trained with specific yield along with other inputs. SHAP values > 1 indicate that the feature at the recharge site contributed to a higher decay coefficient compared to the average decay coefficient for all training sites. Conversely, SHAP values < 1 indicate that the feature slowed the decay of the response
+
+model_sto_path = "D:/Dropbox/WUR/Rscripts/paper_2/models_response_decay2/xgboost_response_decay2_stobaseline.rds"
+model_sto = readr::read_rds(model_sto_path)
+xgb_fit = extract_fit_parsnip(model_sto)$fit
+X_train = model_sto$training%>%
+  select(-all_of(y_var))%>%
+  as.matrix
+X_test = model_sto$testing%>%
+  select(-all_of(y_var))%>%
+  as.matrix
+
+# Calculate SHAP values with interaction for when needed
+shp = shapviz(xgb_fit, X_pred = X_train, interaction = TRUE)
+
+# transform the SHAP values from log to exp
+# the y values are log transformed, for training the model
+# Converting the total response from m^3 to million m^3 at the same time
+# Also convert the site area from m^2 to km^2
+shp$S = 10^shp$S
+shp$S_inter = 10^shp$S_inter
+shp$baseline = 10^shp$baseline
+shp$X = shp$X%>%
+  mutate(area_site = area_site/1e6)
+
+new_colnames = c("Recharge", "Site Area", "Transmissivity", "Groundwater depth", "Vertical Resistance", "River Conductance", "Drain Conductance", "River Density", "Specific Yield")
+colnames(shp) = new_colnames
+
+col_order = read_lines("D:/Dropbox/WUR/Rscripts/paper_2/col_importance_order.txt")
+
+col_order = col_order[col_order%in%colnames(shp)]
+
+# maintain the same ylim
+range_SHAP = range(shp$S)
+range_SHAP = round(range_SHAP, 1)
+
+p = sv_dependence(shp, v = col_order_sy$names, color_var = NULL, interactions = T)+
+  patchwork::plot_spacer()
+
+
+p_final = NULL
+counter = 1
+for (p_lot in p$patches$plots){
+  if (is.null(p_final)){
+    p_final = p_lot+
+      tag_facets(tag_pool = LETTERS[counter:26])+
+        xlab(col_order_sy$labels[[counter]])
+    
+  }else{
+    p_final = p_final +
+      p_lot+
+      tag_facets(tag_pool = LETTERS[counter:26])+
+        xlab(col_order_sy$labels[[counter]])
+
+  }
+  counter = counter+1
+}
+
+p_final[[7]] = p_final[[7]]+ 
+  scale_x_continuous(breaks = c(50000, 100000, 150000))
+
+p_final = p_final+ 
+  patchwork::plot_layout(ncol = 3, axis_titles = "collect_y")&
+  coord_cartesian(ylim = range_SHAP, expand = F)&
+  # geom_smooth(method = 'loess', span = 0.3, formula = y~x, se = F, color = 'red')&
+  common_theme &
+  theme(axis.title=element_text(size=10))&
+  labs(title = "",
+       y = "")
+
+y.grob = grid::textGrob("SHAP value for decay coefficient [multiplier]",
+                        gp = grid::gpar(fontsize=12), rot=90)
+  
+gridExtra::grid.arrange(
+  patchworkGrob(p_final),
+  left = y.grob
+)
+
+```
+
+## Efficient locations for MAR
+
+The trained ML models, being computationally efficient, can be used to estimate the groundwater response to MAR sites across the entire study area, creating a regional scan of potential MAR sites, @fig-efficient_locations. The two characteristics of the groundwater storage were estimated at 1.6 million recharge sites that were spaced at 25 m between their centers. These estimates were completed within 20 seconds, demonstrating the efficiency of the ML models. The surface network has a strong influence on the MAR-response and the fraction of the response left over after 3 months. Both the targets are reduced around the rivers to the west and the south-west, except at the higher regions just north of the south-western river due to the relatively deeper groundwater.
+
+The area to the east especially shows a high potential for MAR, as recharged water stays within the groundwater system for longer due to the low transmissivity of the aquifer in this region. The area in the centre shows a comparable initial MAR-response, but retains a smaller fraction of water after three months, making the area less suitable for MAR. While the steady-state response correlates well with both the MAR-response and the fraction of water leftover, these results also show that a transient approach is needed, as areas that might look promising from a steady-state approach, appear to be less suitable in the more realistic transient case.
+
+![The groundwater response to 15 mm/day of artificial recharge applied over 10 ha recharge sites. The steady-state MAR-response in million m3, A, is estimated using U-Net [@fernandes2024] while the MAR-response after five months of recharge in million m3, B, is estimated by XGBoost. The fraction of water leftover \[unit less\], C, is calculated from the decay coefficient from XGBoost.](C:/Users/valdf/MODFLOW_transient_res/predictions_with_steady_vertical.png){#fig-efficient_locations width="10cm"}
+
+# Discussion
+
+Among the two ML techniques for estimating the MAR-response, U-Net provides the most accurate estimate. It boasts a higher R2 value and a lower MAPE. This better performance could be explained by U-Net's ability to extract high-level features from the inputs in the encoder. These features are not as physically interpretable as the Gaussian kernel used to represent the features around the recharge site as used in XGBoost. Furthermore, the Gaussian kernel is agnostic to the orientation of features such as those of the surface water network. The MAR-response would be higher if all streams were on the same side of the recharge site than if the streams surrounded the site. A feature extraction that can capture this relation could help improve XGBoost. Techniques such as Gabbor filter, Fourier transform, and wavelet transform could help better describe the density and orientation of the surface water network. However, these filters extract multiple representations, such as multiple frequencies in the case of Fourier transformation, which would complicate model interpretability. So, there is a trade-off to be made between the model complexity and the interpretability of the ML model. Despite this disadvantage, the Gaussian kernel has proved to adequately represent the properties around the site while also maintaining a physical interpretation of being the distance-weighted average which can be used to define a range of influence of the feature on nearby recharge sites. Furthermore, as a tree-based model, XGBoost is also more interpretable than U-Net, which facilitates identifying and quantifying the effect of each of the inputs on the MAR-response based on the SHAP values of the model. All identified relations can be explained based on known theoretical relations and the identified collinearity between the input features.
+
+Site design decisions have the strongest influence on the expected response of a system based on the SHAP values from XGBoost. A high recharge rate applied over a large recharge site can effectively cause a high MAR-response. While this is consistent with expectations, the efficiency of the design decision cannot be commented on without simulations. XGBoost identified that the efficiency of the recharge site reduces for very high recharge rates suggesting multiple small sites would be more efficient than a single large recharge site. Conversely, the groundwater storage due to very small recharge sites decays faster than larger sites. Overall, multiple recharge sites larger than 0.1 km2 each recharging up to 20 mm/day would offer the largest volume of increased storage in the groundwater.
+
+Favourable site properties can significantly enhance the expected response. Of these properties, the surface network plays a pivotal role. A low river density and river conductance greatly improve the long-term groundwater storage associated with the recharge site. By strategically reducing the number of small streams and their depths, water authorities can reduce the river density and the river conductance and improve the suitability of a site for desired outcomes. Thus, the interplay between site design and surface network properties offers avenues for manipulating locations to increase the effect of MAR and maximize the stored water.
+
+Among the aquifer properties, locations in a more transmissive aquifer with deep groundwater are commonly identified as potential recharge sites [@gibson_desktop_2014; @lahaye_assessment_2021]. These relations are based on @brown_development_2005 who determined 450 m2/day to 2300 m2/day to be optimal for aquifer storage and recovery at MAR sites across South Florida. A lower transmissivity could lead to significantly high heads at the recharge site, mounding, while the upper limit is maximizes recovery of the stored water, which is outside the scope of this study. While we identified a similar relation between transmissivity and MAR-response, the stored water would also decay more quickly. On the contrary, transmissivity of less than 750 m2/day is conducive to long-term storage of the water. Overall, aquifer transmissivity has a minor impact on groundwater storage relative to the influence of the surface water network.
+
+Although specific yield is traditionally considered insensitive for aquifer storage and recovery [@brown_development_2005; @merritt1986; @yobbi1996], we identified it to be one of the most crucial inputs. It significantly affects the MAR-response and the rate at which the stored water decays away from the site. A high specific yield is also related to a high MAR-response, but this relation does not have a theoretical explanation. This would suggest that multicollinearity between the groundwater depth, river density, and specific yield has influenced the relation. However, as specific yield affects how quickly the groundwater heads react to fluxes in the groundwater, it also affects the rate at which the groundwater decays to the surface water network.
+
+The relations identified in this study are especially applicable when optimizing the location and recharge rate at MAR sites in regions with intensive drainage networks and relatively shallow groundwater during part of the year. The properties of the regional hydrology would likely result in significantly different features being important as can be seen when comparing the findings of this paper with those from @brown_development_2005. However, further research is required to test the generalizability of these findings across different regions, providing the evidence necessary to confidently accept the relations. However, being a tree-based model, XGBoost would likely underestimate the MAR-response and the decay coefficients where the geo-hydrological conditions are beyond the range in the training data. The model could be retrained on numerical model scenarios from these regions to improve the applicability of the model. Furthermore, increasing the diversity of the training data would also minimize overfitting.
+
+# Conclusion
+
+This study sets out to demonstrate the use of ML surrogate models in assessing the transient effects of MAR and their potential to optimize aquifer recharge site selection. We successfully showed that U-Net and XGBoost effectively capture the dynamics, MAR-response and decay coefficient, affecting groundwater storage due to artificial recharge, based on the geo-hydrological properties of a location. While steady-state estimates can serve as a good proxy, they fail to capture all the variance in the response to MAR and provide limited insights into the long-term effects of MAR. In contrast, the trained ML models capture a majority of the variance, achieving good performance metrics with R2 higher than 0.8 and mean percent error below 20 %.
+
+The computational efficiency of the ML models enables rapid estimates of the groundwater storage (3000 times faster than numerical simulations), which is invaluable for systematically comparing and optimizing potential recharge sites[@dai; @fernandes2024]. Additionally, the application of explainable AI techniques, such as SHAP values, offers critical insights into the effects of individual geo-hydrological properties on the increase in groundwater storage. These techniques foster trust in the ML estimates among the domain experts and stakeholders by making the predictions more transparent and interpretable.
+
+Furthermore, the eastern sandy soils in The Netherlands offered unique conditions that made some of the commonly applied criteria for site selection less suitable. For example, we identified the surface water network hinders long term groundwater storage due to the region's shallow groundwater, efficient drainage network and highly permeable sandy aquifers which lead to high return flow. This finding differs from other studies where proximity to rivers is considered advantageous as a source of water for recharge. These results underscore the importance of tailoring site selection to the specific hydrogeological context, where ML surrogate models could play a vital role in guiding decisions and maximizing the effectiveness of the MAR interventions.
+
+# References {.unnumbered}
+
+::: {#refs}
+:::
+
+# Appendix {.unnumbered}
+
+## Decreasing impact of larger recharge sites
+
+```{r}
+#| label: fig-Analyze_site_area
+#| fig-cap: The effect of recharge site area and the recharge rate applied at the site on the predicted MAR-response. Four trend lines are drawn through the points for each quantile to emphasize the changing slope across the range.
+
+SHAP_site = tibble(Site_Area = shp_mar_response$X$`Site Area`, SHAP_value = shp_mar_response$S_inter[,"Site Area", "Site Area"])%>%
+  mutate(site_group = case_when(Site_Area<0.25 ~ "<0.25",
+                                Site_Area<0.5 ~ "0.25-0.5",
+                                Site_Area<0.75 ~ "0.5-0.75",
+                                T ~ ">0.75"
+                                ))%>%
+  mutate(site_group = factor(site_group, levels = c("<0.25", "0.25-0.5", "0.5-0.75", ">0.75")))
+# SHAP_site_models = SHAP_site%>%
+#   group_by(site_group)%>%
+#   nest(.key = "dat")%>%
+#   mutate(quant_fit = map(dat, 
+#                          function(df){
+#                            rq(SHAP_value~Site_Area, data = df)
+#                          }))%>%
+#   mutate(slope = map(quant_fit, function(x){
+#     x$coefficients[2]
+#   }))%>%
+#   mutate(slope = unlist(slope))
+
+p1 = SHAP_site%>%
+  ggplot(aes(Site_Area, SHAP_value, color = site_group, linetype = site_group))+
+  geom_point(alpha = 0.1, show.legend = F)+
+  geom_quantile(quantiles = 0.5, size = 1, formula = y~x, show.legend = F)+
+  labs(y = 'SHAP value of Total Volume [multiplier]', x = "Site Area [sq km]", linetype = NULL)+
+  common_theme+
+    tag_facets(tag_pool = LETTERS)
+
+SHAP_rch = tibble(Recharge = shp_mar_response$X$Recharge, SHAP_value = shp_mar_response$S_inter[,"Recharge", "Recharge"])%>%
+  mutate(site_group = case_when(Recharge<10 ~ "5-10",
+                                Recharge<15 ~ "10-15",
+                                Recharge<20 ~ "15-20",
+                                T ~ "20-25"
+                                ))%>%
+  mutate(site_group = factor(site_group, levels = c("5-10", "10-15", "15-20", "20-25")))
+# SHAP_rch_models = SHAP_rch%>%
+#   group_by(site_group)%>%
+#   nest(.key = "dat")%>%
+#   mutate(quant_fit = map(dat, 
+#                          function(df){
+#                            rq(SHAP_value~Recharge, data = df)
+#                          }))%>%
+#   mutate(slope = map(quant_fit, function(x){
+#     x$coefficients[2]
+#   }))%>%
+#   mutate(slope = unlist(slope))
+
+p2 = SHAP_rch%>%
+  ggplot(aes(Recharge, SHAP_value, color = site_group))+
+  geom_point(alpha = 0.1, show.legend = F)+
+  geom_quantile(quantiles = 0.5, size = 1, formula = y~x, show.legend = F)+
+  labs(x = "Recharge rate [mm/day]", y = 'SHAP value of Total Volume [multiplier]')+
+  common_theme+
+    tag_facets(tag_pool = LETTERS[-1])
+
+p1+p2+ 
+  patchwork::plot_layout(ncol = 2, axis_titles = "collect_y")&
+  common_theme &
+  labs(title = "",
+       y = "SHAP value for MAR-response [multiplier]")
+```
+
+## Specific yield and groundwater depth
+
+::: {#fig-depth_vs_rootzone layout-ncol="1"}
+![](D:/Dropbox/WUR/Rscripts/paper_2/depth_vs_rootzone_moisture.png)
+
+The relation between the moisture content in the rootzone and the groundwater depth, as a scatter plot. The moisture content is modeled by the unsaturated zone model MetaSWAP. The moisture content is lower for locations with a deeper groundwater which leads to a higher specific yield.
+:::
+
+::: {#fig-depth_vs_sy layout-ncol="1"}
+![](D:/Dropbox/WUR/Rscripts/paper_2/depth_vs_sy.png)
+
+The relation between the specific yield and the groundwater depth, as a scatter plot. The specific yield is modeled by the unsaturated zone model MetaSWAP. The specific is lower for locations with a deeper groundwater which leads to a higher specific yield.
+:::
+
+## Specific yield and river density
+
+::: {#fig-river_density_vs_rootzone layout-ncol="1"}
+![](D:/Dropbox/WUR/Rscripts/paper_2/River_density_vs_rootzone_moisture.png)
+
+The relation between the moisture content in the rootzone and the river density, as a scatter plot. The moisture content is modeled by the unsaturated zone model MetaSWAP while the river density is calculated from the inputs to the numerical groundwater model. The moisture content is lower for locations with a deeper groundwater which leads to a higher specific yield.
+:::
+
+::: {#fig-riv_vs_sy layout-ncol="1"}
+![](D:/Dropbox/WUR/Rscripts/paper_2/River_density_vs_Sy.png)
+
+The relation between the specific yield and the river density, as a scatter plot. The specific yield is modeled by the unsaturated zone model MetaSWAP while the river density is calculated from the inputs to the numerical groundwater model. The moisture content is lower for locations with a deeper groundwater which leads to a higher specific yield.
+:::
